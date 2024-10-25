@@ -1,0 +1,489 @@
+
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF TOTALITY</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.9.359/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/4.5.0/fabric.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://unpkg.com/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+        }
+
+        #app {
+            max-width: 1100px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            margin-top: 80px;
+        }
+
+        h1 {
+            text-align: center;
+            font-size: 2.5em;
+            color: #333;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.2);
+            margin-bottom: 20px;
+        }
+
+        #toolbar {
+            display: flex;
+            flex-wrap: nowrap;
+            justify-content: space-between;
+            align-items: center;
+            position: sticky;
+            top: 0;
+            background-color: white;
+            padding: 10px 20px;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+            z-index: 1000;
+        }
+
+        button, .file-upload {
+            background: linear-gradient(45deg, #beedc0, #97e39b);
+            border: none;
+            color: rgb(0, 0, 0);
+            padding: 10px 20px;
+            text-align: center;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            margin: 5px;
+            cursor: pointer;
+            border-radius: 5px;
+            transition: background 0.3s, transform 0.2s;
+            height: 40px;
+            min-width: 85px;
+        }
+
+        button:hover, .file-upload:hover {
+            background: linear-gradient(45deg, #8ff994, #78f97c);
+            transform: translateY(-2px);
+        }
+
+        input[type="file"] {
+            display: none;
+        }
+
+        #zoom-controls {
+            display: flex;
+            align-items: center;
+        }
+
+        #zoom-controls button {
+            margin: 0 5px;
+            min-width: 30px;
+        }
+
+        #zoom-controls input[type="range"] {
+            margin: 0 5px;
+            width: 80px;
+        }
+
+        #scroll-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        #scroll-speed-slider {
+            width: 100px;
+        }
+
+        #scroll-speed-value {
+            min-width: 20px;
+            text-align: center;
+        }
+
+        .page-container {
+            position: relative;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .page-canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+
+        .pdf-render {
+            width: 100%;
+            height: auto;
+        }
+
+        #zoom-value {
+            min-width: 40px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="app">
+        <h1>PDF TOTALITY</h1>
+        <div id="toolbar">
+            <label class="file-upload">
+                Escolher arquivo PDF
+                <input type="file" id="pdf-file" accept=".pdf">
+            </label>
+            <button id="add-text">Adicionar Texto</button>
+            <button id="add-image">Adicionar Imagem</button>
+            <button id="save-pdf">Salvar/Baixar</button>
+            <button id="toggle-reading-mode">Modo Leitura</button>
+            <div id="scroll-controls">
+                <button id="toggle-scroll">Scroll Automático</button>
+                <input type="range" id="scroll-speed-slider" min="1" max="10" value="5">
+                <span id="scroll-speed-value"></span>
+            </div>
+            <div id="zoom-controls">
+                <button id="zoom-out">Zoom -</button>
+                <input type="range" id="zoom-level" min="50" max="300" value="100">
+                <button id="zoom-in">Zoom +</button>
+                <span id="zoom-value"></span>
+            </div>
+        </div>
+        <div id="pdf-container"></div>
+        <div id="reading-mode"></div>
+    </div>
+    
+    <script>
+
+
+        const { PDFDocument, rgb } = PDFLib;
+        const { jsPDF } = window.jspdf;
+        let pdfDoc = null;
+        let originalPdfBytes = null;
+        let currentScale = 1;
+        let pdfContainer = document.getElementById('pdf-container');
+        let readingMode = document.getElementById('reading-mode');
+        let isReadingMode = false;
+        let editorCanvases = [];
+        let scrollInterval = null;
+        let currentEditingPage = 0;
+        let isAutoScrollActive = false;
+    
+        document.getElementById('pdf-file').addEventListener('change', function(e) {
+          let file = e.target.files[0];
+          if (file.type !== 'application/pdf') {
+            console.error('Erro: O arquivo selecionado não é um PDF');
+            return;
+          }
+    
+          let fileReader = new FileReader();
+          fileReader.onload = function() {
+            originalPdfBytes = new Uint8Array(this.result);
+    
+            pdfjsLib.getDocument(originalPdfBytes).promise.then(function(pdf) {
+              pdfDoc = pdf;
+              renderAllPages();
+            });
+          };
+          fileReader.readAsArrayBuffer(file);
+        });
+    
+        function renderAllPages() {
+          pdfContainer.innerHTML = '';
+          readingMode.innerHTML = '';
+          editorCanvases = [];
+    
+          for (let pageNum = 1; pageNum <= pdfDoc.numPages; pageNum++) {
+            let pageContainer = document.createElement('div');
+            pageContainer.className = 'page-container';
+            let pdfCanvas = document.createElement('canvas');
+            pdfCanvas.className = 'pdf-render page-canvas';
+            let editorCanvas = document.createElement('canvas');
+            editorCanvas.className = 'pdf-editor page-canvas';
+            pageContainer.appendChild(pdfCanvas);
+            pageContainer.appendChild(editorCanvas);
+    
+            pdfContainer.appendChild(pageContainer);
+    
+            renderPage(pageNum, pdfCanvas, editorCanvas);
+          }
+          currentEditingPage = 0; // Define a primeira página como padrão
+        }
+    
+        function renderPage(num, pdfCanvas, editorCanvas) {
+          pdfDoc.getPage(num).then(function(page) {
+            let viewport = page.getViewport({scale: currentScale});
+            pdfCanvas.width = viewport.width;
+            pdfCanvas.height = viewport.height;
+            editorCanvas.width = viewport.width;
+            editorCanvas.height = viewport.height;
+    
+            pdfCanvas.parentElement.style.width = `${viewport.width}px`;
+            pdfCanvas.parentElement.style.height = `${viewport.height}px`;
+    
+            let renderContext = {
+              canvasContext: pdfCanvas.getContext('2d'),
+              viewport: viewport
+            };
+            page.render(renderContext);
+    
+            let fabricCanvas = new fabric.Canvas(editorCanvas, {
+              preserveObjectStacking: true
+            });
+            fabricCanvas.setWidth(viewport.width);
+            fabricCanvas.setHeight(viewport.height);
+            editorCanvases[num - 1] = fabricCanvas;
+    
+            page.getTextContent().then(function(textContent) {
+              let textItems = textContent.items;
+              let text = textItems.map(item => item.str).join(' ');
+              let pageDiv = document.createElement('div');
+              pageDiv.innerHTML = `<h2>Página ${num}</h2><p>${text}</p>`;
+              readingMode.appendChild(pageDiv);
+            });
+          });
+        }
+    
+        document.getElementById('add-text').addEventListener('click', function() {
+          let text = prompt("Digite o texto a ser adicionado:");
+          if (text) {
+            let textbox = new fabric.Textbox(text, {
+              left: 100,
+              top: 100,
+              width: 200,
+              fontSize: 20
+            });
+            editorCanvases[currentEditingPage].add(textbox);
+            editorCanvases[currentEditingPage].renderAll();
+          }
+        });
+    
+        document.getElementById('add-image').addEventListener('click', function() {
+          let input = document.createElement('input');
+          input.type = 'file';
+          input.accept = 'image/*';
+          input.onchange = function(e) {
+            let file = e.target.files[0];
+            let reader = new FileReader();
+            reader.onload = function(f) {
+              let data = f.target.result;
+              fabric.Image.fromURL(data, function(img) {
+                img.scale(0.5);
+                editorCanvases[currentEditingPage].add(img);
+                editorCanvases[currentEditingPage].renderAll();
+              });
+            };
+            reader.readAsDataURL(file);
+          };
+          input.click();
+        });
+    
+        document.getElementById('save-pdf').addEventListener('click', async function() {
+          const pdfDoc = await PDFDocument.load(originalPdfBytes);
+          const pages = pdfDoc.getPages();
+    
+          for (let i = 0; i < editorCanvases.length; i++) {
+            const fabricCanvas = editorCanvases[i];
+            const pdfPage = pages[i];
+    
+            const pageElements = fabricCanvas.getObjects().filter(obj => {
+              return obj.visible &&
+                     obj.left >= 0 && obj.left <= fabricCanvas.width &&
+                     obj.top >= 0 && obj.top <= fabricCanvas.height;
+            });
+    
+            if (pageElements.length > 0) {
+              const { width, height } = pdfPage.getSize();
+    
+              const tempCanvas = document.createElement('canvas');
+              tempCanvas.width = width;
+              tempCanvas.height = height;
+              const tempContext = tempCanvas.getContext('2d');
+    
+              const scaleFactor = width / fabricCanvas.width;
+    
+              pageElements.forEach(element => {
+                tempContext.save();
+                tempContext.scale(scaleFactor, scaleFactor);
+                element.render(tempContext);
+                tempContext.restore();
+              });
+    
+              const pngImage = await pdfDoc.embedPng(tempCanvas.toDataURL('image/png'));
+    
+              pdfPage.drawImage(pngImage, {
+                x: 0,
+                y: 0,
+                width: width,
+                height: height,
+              });
+            }
+          }
+    
+          const pdfBytes = await pdfDoc.save();
+          const blob = new Blob([pdfBytes], { type: 'application/pdf' });
+          const link = document.createElement('a');
+          link.href = URL.createObjectURL(blob);
+          link.download = 'documento_editado.pdf';
+          link.click();
+        });
+
+
+
+     async function saveCanvasAsPDF(canvas) {
+    const pdfDoc = await PDFLib.PDFDocument.create();
+    const page = pdfDoc.addPage([canvas.width, canvas.height]);
+    
+    const imgData = canvas.toDataURL('image/png', 1.0);
+    const pngImage = await pdfDoc.embedPng(imgData);
+    const pngDims = pngImage.scale(1);
+    
+    page.drawImage(pngImage, {
+        x: 0,
+        y: 0,
+        width: pngDims.width,
+        height: pngDims.height,
+    });
+
+    // Adicionando texto com qualidade
+    page.drawText('Texto Exemplo', {
+        x: 50,
+        y: 750,
+        size: 30,
+        color: PDFLib.rgb(0, 0, 0),
+    });
+
+    const pdfBytes = await pdfDoc.save();
+    download(pdfBytes, 'documento.pdf');
+}
+
+// Função para download
+function download(data, filename) {
+    const blob = new Blob([data], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+
+
+    
+        document.getElementById('toggle-reading-mode').addEventListener('click', function() {
+          isReadingMode = !isReadingMode;
+          if (isReadingMode) {
+            pdfContainer.style.display = 'none';
+            readingMode.style.display = 'block';
+          } else {
+            pdfContainer.style.display = 'block';
+            readingMode.style.display = 'none';
+          }
+        });
+    
+ 
+
+
+
+        let isScrolling = false;
+let scrollSpeed = 5; // Velocidade inicial
+
+function toggleScroll() {
+    if (isScrolling) {
+        clearInterval(scrollInterval);
+        isScrolling = false;
+        document.getElementById('toggle-scroll').textContent = 'Scroll Automático';
+    } else {
+        isScrolling = true;
+        document.getElementById('toggle-scroll').textContent = 'Parar Scroll';
+        startScroll();
+    }
+}
+
+function startScroll() {
+    scrollInterval = setInterval(() => {
+        window.scrollBy(0, scrollSpeed);
+        if ((window.innerHeight + window.scrollY) >= document.body.offsetHeight) {
+            clearInterval(scrollInterval);
+            isScrolling = false;
+            document.getElementById('toggle-scroll').textContent = 'Scroll Automático';
+        }
+    }, 50);
+}
+
+// Certifique-se de que o DOM está completamente carregado antes de adicionar event listeners
+document.addEventListener('DOMContentLoaded', function() {
+    const toggleScrollButton = document.getElementById('toggle-scroll');
+    const scrollSpeedSlider = document.getElementById('scroll-speed-slider');
+    const scrollSpeedValue = document.getElementById('scroll-speed-value');
+
+    if (toggleScrollButton) {
+        toggleScrollButton.addEventListener('click', toggleScroll);
+    }
+
+    if (scrollSpeedSlider && scrollSpeedValue) {
+        scrollSpeedSlider.addEventListener('input', function() {
+            scrollSpeed = parseInt(this.value);
+            scrollSpeedValue.textContent = scrollSpeed;
+            if (isScrolling) {
+                clearInterval(scrollInterval);
+                startScroll();
+            }
+        });
+    }
+});
+
+
+
+
+
+    
+        const zoomInButton = document.getElementById('zoom-in');
+        const zoomOutButton = document.getElementById('zoom-out');
+        const zoomLevel = document.getElementById('zoom-level');
+        const zoomValue = document.getElementById('zoom-value');
+    
+        zoomInButton.addEventListener('click', () => {
+          zoomLevel.value = Math.min(parseInt(zoomLevel.value) + 10, 300);
+          updateZoom();
+        });
+    
+        zoomOutButton.addEventListener('click', () => {
+          zoomLevel.value = Math.max(parseInt(zoomLevel.value) - 10, 50);
+          updateZoom();
+        });
+    
+        zoomLevel.addEventListener('input', updateZoom);
+    
+        function updateZoom() {
+          const newZoom = parseInt(zoomLevel.value);
+          currentScale = newZoom / 100;
+          zoomValue.textContent = `${newZoom}%`;
+          if (pdfDoc) {
+            renderAllPages();
+          }
+        }
+    
+        document.addEventListener('keydown', function(e) {
+          if (e.key === 'Delete' || e.key === 'Backspace') {
+            editorCanvases.forEach(canvas => {
+              if (canvas.getActiveObject()) {
+                canvas.remove(canvas.getActiveObject());
+                canvas.renderAll();
+              }
+            });
+          }
+        });
+      </script>
+    </body>
+    </html>
